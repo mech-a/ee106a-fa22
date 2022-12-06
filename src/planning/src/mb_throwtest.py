@@ -7,7 +7,7 @@ import math
 from intera_interface import gripper as robot_gripper
 from intera_interface import Limb
 
-# -0.5 0.0 0.0 0.0 0.0 -2.96 1.57 is a neutral position to begin throwing from only J5.
+# -0.5 -0.9 0.0 -1.4 0.0 -2.0 1.57 is a neutral position to begin throwing from only J5.
 
 def main():
     rospy.init_node('throwertest')
@@ -36,42 +36,40 @@ def main():
     shoulder_speed = 1.328
 
     depth = 1.7
-    height = 1
+    height = 0.729
     g = 9.81
 
     model = pyo.ConcreteModel()
     model.theta1 = pyo.Var()
     model.theta3 = pyo.Var()
     model.theta5 = pyo.Var()
-    model.dr = pyo.Var()
-    model.hr = pyo.Var()
-    model.vd = pyo.Var()
-    model.vh = pyo.Var()
-    model.t = pyo.Var()
+    model.dr = pyo.Var() # end effector depth
+    model.hr = pyo.Var() # end effector height
+    model.vd = pyo.Var() # end effector velocity in the x (depth) direction
+    model.vh = pyo.Var() # end effector velocity in the z (height) direction
+    model.t = pyo.Var() # time
 
     model.Constraint1 = pyo.Constraint(
         expr = model.vd == (arm_length * pyo.cos(math.pi/2 + model.theta1) * shoulder_speed) +
                            (forearm_length * pyo.cos(math.pi/2 + model.theta1 + model.theta3) * (shoulder_speed + elbow_speed)) +
                            (hand_length * pyo.cos(math.pi/2 + model.theta1 + model.theta3 +  model.theta5) * (shoulder_speed + elbow_speed + wrist_speed))
-                           )
+                           ) # set vd as a function of sawyer dimensions, sawyer speeds, joint angles
     model.Constraint2 = pyo.Constraint(
         expr = model.dr == (arm_length * pyo.sin(math.pi/2 + model.theta1)) +
                            (forearm_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3)) +
                            (hand_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3 +  model.theta5)) 
-                           )
+                           ) # set dr as a function of sawyer dimensions, joint angles
     model.Constraint3 = pyo.Constraint(
         expr = model.hr == (arm_length * pyo.cos(math.pi/2 + model.theta1)) +
                            (forearm_length * pyo.cos(math.pi/2 + model.theta1 + model.theta3)) +
                            (hand_length * pyo.cos(math.pi/2 + model.theta1 + model.theta3 +  model.theta5)) 
-                           )
+                           ) # set hr as a function of sawyer dimensions, joint angles
     model.Constraint4 = pyo.Constraint(
         expr = model.vh == -((arm_length * pyo.sin(math.pi/2 + model.theta1) * shoulder_speed) +
                            (forearm_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3) * (shoulder_speed + elbow_speed)) +
                            (hand_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3 +  model.theta5) * (shoulder_speed + elbow_speed + wrist_speed))
-                           ))
-    # model.Constraint4 = pyo.Constraint(
-    #     expr = depth == model.dr + (model.vd * pyo.cos(model.theta1 + model.theta3 +  model.theta5) + 
-    #                            pyo.sqrt((model.vd * pyo.sin(-(model.theta1 + model.theta3 +  model.theta5)))**2 + 2*g*(base_height + model.hr - height)))/g)
+                           )) # set vh as a function of sawyer dimensions, sawyer speeds, joint angles
+    # minimize distance between target coordinates and the coordinates of the ball at some point along its trajectory
     model.Objective = pyo.Objective(expr = (model.dr + model.t*model.vd - depth)**2 + (base_height + model.hr + model.t*model.vh - g*(model.t**2)/2 - height)**2)
 
     solver = pyo.SolverFactory('ipopt')
@@ -89,9 +87,15 @@ def main():
     print(f"{results.solver.termination_condition=}")
     # model.display()
 
-    _ = input('to throw')
+    _ = input('to load')
     total_time = 0.4
     throw_time = 0.3
+    theta1_0 = theta1 - throw_time * shoulder_speed
+    theta3_0 = theta3 - throw_time * elbow_speed
+    theta5_0 = theta5 - throw_time * wrist_speed
+    print(f"{theta1_0=}, {theta3_0=}, {theta5_0=}")
+
+    _ = input('to throw')
     t0 = time.time()
     while not rospy.is_shutdown():
         limb.set_joint_velocities({elbow_joint: elbow_speed, wrist_joint: wrist_speed, shoulder_joint: shoulder_speed})
