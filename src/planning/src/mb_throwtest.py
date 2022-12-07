@@ -6,6 +6,8 @@ import math
 
 from intera_interface import gripper as robot_gripper
 from intera_interface import Limb
+import moveit_commander
+import moveit_msgs.msg
 
 # -0.5 -0.9 0.0 -1.4 0.0 -2.0 1.57 is a neutral position to begin throwing from only J5.
 
@@ -16,11 +18,15 @@ def main():
     limb.set_joint_position_speed(1.0) # this only sets it for position control - i don't think it matters for us
     limb.set_command_timeout(0.4)
 
-    _ = input('to calibrate')
-    gripper.calibrate()
+    _ = input('to open')
+    # gripper.calibrate()
+    gripper.open()
+    rospy.sleep(1)
 
     _ = input('to close')
     gripper.close()
+    rospy.sleep(0.2)
+    gripper.stop()
 
     _ = input('to calculate')
     wrist_joint = 'right_j5'
@@ -28,15 +34,15 @@ def main():
     shoulder_joint = 'right_j1'
 
     base_height = 1.237
-    hand_length = 0.25
+    hand_length = 0.3
     wrist_speed = 3.485
     forearm_length = 0.4
     elbow_speed = 1.957
     arm_length = 0.4
     shoulder_speed = 1.328
 
-    depth = 1.7
-    height = 0.729
+    depth = (56 + 16)/39.37
+    height = 0.72 + 4.75/39.37
     g = 9.81
 
     model = pyo.ConcreteModel()
@@ -102,7 +108,9 @@ def main():
         d = time.time() - t0
         if d >= throw_time:
             break
+    print(f"{time.time()-t0=}, {d=}")
     gripper.open()
+    print(f"{time.time()-t0=}, {d=}")
     while not rospy.is_shutdown():
         limb.set_joint_velocities({elbow_joint: elbow_speed, wrist_joint: wrist_speed, shoulder_joint: shoulder_speed})
         d = time.time() - t0
