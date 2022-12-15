@@ -137,7 +137,10 @@ def main():
     
     #_ = input('to open')
     #gripper.calibrate()
-    juice = [(1.7, 0), (1.4, -0.1), (1.5, -0.05)]
+    # demjuice
+    #juice = [(1.7, 0), (1.4, -0.1), (1.5, -0.05)]
+    # JUICE FOR consistency
+    juice = [(1.7, 0), (1.7, 0), (1.7, 0)]
     for j in juice:
         c = input('to close')
         print("Gripper is_ready:", gripper.is_ready())
