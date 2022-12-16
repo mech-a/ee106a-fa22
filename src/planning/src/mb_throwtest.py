@@ -21,16 +21,21 @@ def go_to_joint_angles(theta0, theta1, theta3, theta5):
 
 # converts homo image coords to a depth and angle to throw at
 def get_cup_pos(x, y):
+    dist_height = 600.0 # measured: 550
+    dist_width = 180.0
+    x /= dist_width
+    y += 45 # bc the cup has height
+    y /= dist_height
     assert 0 <= x <= 1 and 0 <= y <= 1 # cup_x and cup_y are ratios of the table dim
     # table dimensions in meters
     table_width = 18/39.37
     table_height = 57.5/39.37
     # dist from robot to table start in meters
-    table_depth = 1.32 #52/39.37
+    table_depth = 1.30 #52/39.37
     # offsets in meters
     arm_off = 0.1603  # pivot to arm
-    pivot_off = 2.5/39.37 + table_width/2  # left edge of table to pivot (cuz Billy is Billy)
-    
+    # pivot_off = 2.5/39.37 + table_width/2  # left edge of table to pivot (cuz Billy is Billy)
+    pivot_off = 13.5/39.37
     # get real world cup position
     cup_y = table_depth + table_height * (1 - y)
     cup_x = table_width * x
@@ -49,25 +54,32 @@ captured = False
 def capture_img(img_message):
     global kps
     global captured
-    # if captured:
-    #     return kps
+    if captured:
+        return kps
     bridge = CvBridge()
-    img_cv = bridge.imgmsg_to_cv2(img_message, desired_encoding='passthrough')
+    img_cv = bridge.imgmsg_to_cv2(img_message)#, desired_encoding='passthrough')
     img_ho = homograph_img(img_cv)
-    kops = find_keypoints_blob(img_ho)
+    kops = find_circles(img_ho)
+    # print("imcap", len(kops), captured)
+    # kops = [1]
     if len(kops) and not captured:
+        print("ooga")
         kps = kops
-        cv2.imshow('img_cv', img_cv)
-        cv2.imshow('img_ho', img_ho)
-        img_lab = cv2.drawKeypoints(img_cv, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        cv2.imshow('im_lab', img_lab)
+        print(kps)
+        # cv2.imshow('img_cv2', img_cv)
+        # cv2.waitKey(0)
+        # cv2.imshow('img_ho', img_ho)
+        # cv2.waitKey(0)
+        # cv2.imwrite('/home/cc/ee106a/fa22/class/ee106a-abg/Desktop/find_table.png', img_cv)
+        # img_lab = cv2.drawKeypoints(img_cv, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        # cv2.imshow('im_lab', img_lab)
         captured = True
         # print([kp.pt for kp in kps])
 
 def homograph_img(img_cv):
-    dist_height = 575.0 # measured: 550
+    dist_height = 600.0 # measured: 550
     dist_width = 180.0
-    pts_src = np.array([[334.0, 40.0], [578.0,44.0], [351.0,447.0],[478.0,447.0]])
+    pts_src = np.array([[337.0, 7.0], [455.0, 7.0], [283.0,355.0],[500.0,358.0]])
     pts_dst = np.array([[0.0, 0.0], [dist_width,0.0], [0.0,dist_height],[dist_width, dist_height]])
 
     #---- Framing the homography matrix
@@ -77,6 +89,24 @@ def homograph_img(img_cv):
     homo_resized = cv2.warpPerspective(img_cv, h, (int(dist_width),int(dist_height)))
     return homo_resized
 
+def find_circles(img_cv):
+    # # Modified from https://stackoverflow.com/questions/60637120/detect-circles-in-opencv
+    minDist = 15
+    param1 = 50 #500
+    param2 = 30 #200 #smaller value-> more false circles
+    minRadius = 10
+    maxRadius = 30 #10
+
+    circles = cv2.HoughCircles(img_cv, cv2.HOUGH_GRADIENT, 1, minDist, param1=param1, param2=param2, minRadius=minRadius, maxRadius=maxRadius)
+    print(len(circles[0,:]))
+    if circles is not None:
+        circles = np.uint16(np.around(circles))
+        for i in circles[0,:]:
+            print("test", (i[0], i[1]), i[2])
+            cv2.circle(img_cv, (i[0], i[1]), i[2], (255, 255, 255), 2)
+    cv2.imshow('img_cv2', img_cv)
+    cv2.waitKey(0)
+    return circles[0,:,:2]
 
 def find_keypoints_blob(img_cv):
     # Set up the detector with default parameters.
@@ -109,8 +139,9 @@ def find_keypoints_blob(img_cv):
     return keypoints
 
 def main():
+    global kps
+    global captured
     rospy.init_node('throwertest')
-    #rospy.Subscriber("/io/internal_camera/right_hand_camera/image_rect", Image, capture_img)
 
     limb = Limb('right')
     gripper = robot_gripper.Gripper('right_gripper')
@@ -140,8 +171,10 @@ def main():
     # demjuice
     #juice = [(1.7, 0), (1.4, -0.1), (1.5, -0.05)]
     # JUICE FOR consistency
-    juice = [(1.7, 0), (1.7, 0), (1.7, 0)]
+    juice = [(1.4, 0), (1.6, 0), (1.8, 0)]
     for j in juice:
+        _ = input('go to loading pos')
+        go_to_joint_angles(-0.5, 0, 0, 0)
         c = input('to close')
         print("Gripper is_ready:", gripper.is_ready())
         if (c != "n"):
@@ -154,6 +187,29 @@ def main():
         print("Gripper error:", gripper.has_error())
         print("Gripper is_calibrated:", gripper.is_calibrated())
         print("Gripper is_gripping:", gripper.is_gripping())
+
+        _ = input('find cup')
+        # commit vision
+        kps = []
+        captured = False
+        go_to_joint_angles(-0.5, -0.785, 0, 0)
+        rospy.sleep(3)
+        sub = rospy.Subscriber("/io/internal_camera/right_hand_camera/image_rect", Image, capture_img)
+        while not captured:
+            rospy.sleep(1)
+        while(input('redo? y/N: ') != 'N'):
+            kps = []
+            captured = False
+            while not captured:
+                rospy.sleep(1)
+        sub.unregister()
+
+        #depth, theta = get_cup_pos(0.7, 24/57.5)
+        print(kps)
+        #depth, theta = kps[0].pt
+        #print(depth, theta)
+        depth, theta = get_cup_pos(*kps[0])
+        print("Throwing to depth:", depth, "meters and angle", theta)
 
         _ = input('to calculate')
         wrist_joint = 'right_j5'
@@ -168,15 +224,7 @@ def main():
         arm_length = 0.4
         shoulder_speed = 1.328
 
-        go_to_joint_angles(-0.5, -0.785, 0, 0)
-
-        #depth, theta = get_cup_pos(0.7, 24/57.5)
-        print(kps)
-        #depth, theta = kps[0].pt
-        #print(depth, theta)
-        depth, theta = j
-        print("Throwing to depth:", depth, "meters")
-        theta0_0 = -0.5 + theta  # including initial robot angle
+        theta0_0 = -0.5 - theta  # including initial robot angle
         #depth = (56 + 0)/39.37
 
         height = 0.72 + 4.75/39.37 # for cup height
