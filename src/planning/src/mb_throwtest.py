@@ -31,11 +31,11 @@ def get_cup_pos(x, y):
     table_width = 18/39.37
     table_height = 57.5/39.37
     # dist from robot to table start in meters
-    table_depth = 1.30 #52/39.37
+    table_depth = 47/39.37 #52/39.37 # 51.75
     # offsets in meters
     arm_off = 0.1603  # pivot to arm
-    # pivot_off = 2.5/39.37 + table_width/2  # left edge of table to pivot (cuz Billy is Billy)
-    pivot_off = 13.5/39.37
+    #pivot_off = 2.5/39.37 + table_width/2  # left edge of table to pivot (cuz Billy is Billy)
+    pivot_off = 12.5/39.37
     # get real world cup position
     cup_y = table_depth + table_height * (1 - y)
     cup_x = table_width * x
@@ -79,7 +79,7 @@ def capture_img(img_message):
 def homograph_img(img_cv):
     dist_height = 600.0 # measured: 550
     dist_width = 180.0
-    pts_src = np.array([[337.0, 7.0], [455.0, 7.0], [283.0,355.0],[500.0,358.0]])
+    pts_src = np.array([[331.0, 17.0], [453.0, 17.0], [278.0,389.0],[511.0,390.0]])
     pts_dst = np.array([[0.0, 0.0], [dist_width,0.0], [0.0,dist_height],[dist_width, dist_height]])
 
     #---- Framing the homography matrix
@@ -94,8 +94,8 @@ def find_circles(img_cv):
     minDist = 15
     param1 = 50 #500
     param2 = 30 #200 #smaller value-> more false circles
-    minRadius = 10
-    maxRadius = 30 #10
+    minRadius = 20
+    maxRadius = 40 #10
 
     circles = cv2.HoughCircles(img_cv, cv2.HOUGH_GRADIENT, 1, minDist, param1=param1, param2=param2, minRadius=minRadius, maxRadius=maxRadius)
     print(len(circles[0,:]))
