@@ -14,129 +14,114 @@ from intera_interface import Limb
 import moveit_commander
 import moveit_msgs.msg
 
-# -0.5 -0.9 0.0 -1.4 0.0 -2.0 1.57 is a neutral position to begin throwing from only J5.
+# -------------------------------------------------------------
+# CONSTANTS
+NUM_THROWS = 1
+THROW_TIME = 0.4  # time in seconds of entire throwing motion
+RELEASE_TIME = 0.3  # time in seconds until ball release
+
+CUP_HEIGHT = 45  # in deci-inches
+# table dimensions in deci-inches
+TABLE_LENGTH = 600.0
+TABLE_WIDTH = 180.0
+# table position
+TABLE_DEPTH = 517.5  # dist from robot pivot to table start (South edge) in deci-inches
+TABLE_HEIGHT = 0.72  # height of table surface from ground
+TABLE_IMG_CORNERS = np.array([[331.0, 17.0], [453.0, 17.0], [278.0,389.0],[511.0,390.0]])  # coords of table corners in image (NW, NE, SW, SE)
+ARM_OFF = 0.1603  # dist between pivot and throwing axis in meters
+PIVOT_OFF = 12.5/39.37  # dist between pivot and left edge of table in meters
+# depth offset in perceived cup pos meters to account for minor errors (eg: overshooting -> -ve offset)
+DEPTH_OFFSET = -4.5/39.37
+
+# GLOBAL VARIABLES
+kps = []  # global list for detected cup locations
+captured = False  # global flag for whether image is captured 
+# -------------------------------------------------------------
+
+
+# run shell command to go to specified joint angle
 def go_to_joint_angles(theta0, theta1, theta3, theta5):
     subprocess.run(f"rosrun intera_examples go_to_joint_angles.py -q {theta0} {theta1} 0.0 {theta3} 0.0 {theta5} 1.57".split())  
     rospy.sleep(0.5)  # for safety
 
-# converts homo image coords to a depth and angle to throw at
+
+# converts homo image coords (origin at NW corner) to a depth and angle to throw at
 def get_cup_pos(x, y):
-    dist_height = 600.0 # measured: 550
-    dist_width = 180.0
-    x /= dist_width
-    y += 45 # bc the cup has height
-    y /= dist_height
+    # convert deci-inches to ratios
+    x /= TABLE_WIDTH
+    y += CUP_HEIGHT 
+    y /= TABLE_LENGTH
+
     assert 0 <= x <= 1 and 0 <= y <= 1 # cup_x and cup_y are ratios of the table dim
     # table dimensions in meters
-    table_width = 18/39.37
-    table_height = 57.5/39.37
+    table_width = TABLE_WIDTH/393.7
+    table_height = TABLE_LENGTH/393.7
     # dist from robot to table start in meters
-    table_depth = 47/39.37 #52/39.37 # 51.75
-    # offsets in meters
-    arm_off = 0.1603  # pivot to arm
-    #pivot_off = 2.5/39.37 + table_width/2  # left edge of table to pivot (cuz Billy is Billy)
-    pivot_off = 12.5/39.37
+    table_depth = TABLE_DEPTH/393.7
     # get real world cup position
     cup_y = table_depth + table_height * (1 - y)
     cup_x = table_width * x
     
-    cup_pivot_dist = ((cup_x - pivot_off)**2 + cup_y**2) ** 0.5
-    cup_depth = (cup_pivot_dist**2 - arm_off**2) ** 0.5
+    # calculate cup depth
+    cup_pivot_dist = ((cup_x - PIVOT_OFF)**2 + cup_y**2) ** 0.5
+    cup_depth = (cup_pivot_dist**2 - ARM_OFF**2) ** 0.5
     
+    # calculate cup angle (trig stuff)
     cup_pivot_angle = math.atan(cup_x/cup_y)
-    cup_pivot_rotated_angle = math.atan(arm_off/cup_depth)
+    cup_pivot_rotated_angle = math.atan(ARM_OFF/cup_depth)
     cup_angle = cup_pivot_angle - cup_pivot_rotated_angle
-    return cup_depth, cup_angle
 
-kps = []
-captured = False
+    return cup_depth + DEPTH_OFFSET, cup_angle
 
+
+# callback function for subscriber - takes image message and updates global variables
 def capture_img(img_message):
     global kps
     global captured
+    # if image already captured, return cup locations
     if captured:
         return kps
+    
     bridge = CvBridge()
-    img_cv = bridge.imgmsg_to_cv2(img_message)#, desired_encoding='passthrough')
-    img_ho = homograph_img(img_cv)
-    kops = find_circles(img_ho)
-    # print("imcap", len(kops), captured)
-    # kops = [1]
+    img_cv = bridge.imgmsg_to_cv2(img_message)  # convert image type
+    img_ho = homograph_img(img_cv)  # perform homography on image
+    kops = find_circles(img_ho)  # run circle detection to find cup locations
     if len(kops) and not captured:
-        print("ooga")
         kps = kops
-        print(kps)
-        # cv2.imshow('img_cv2', img_cv)
-        # cv2.waitKey(0)
-        # cv2.imshow('img_ho', img_ho)
-        # cv2.waitKey(0)
-        # cv2.imwrite('/home/cc/ee106a/fa22/class/ee106a-abg/Desktop/find_table.png', img_cv)
-        # img_lab = cv2.drawKeypoints(img_cv, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        # cv2.imshow('im_lab', img_lab)
         captured = True
-        # print([kp.pt for kp in kps])
 
+
+# perform homography on given CV image
 def homograph_img(img_cv):
-    dist_height = 600.0 # measured: 550
-    dist_width = 180.0
-    pts_src = np.array([[331.0, 17.0], [453.0, 17.0], [278.0,389.0],[511.0,390.0]])
-    pts_dst = np.array([[0.0, 0.0], [dist_width,0.0], [0.0,dist_height],[dist_width, dist_height]])
+    pts_src = TABLE_IMG_CORNERS
+    pts_dst = np.array([[0.0, 0.0], [TABLE_WIDTH,0.0], [0.0,TABLE_LENGTH],[TABLE_WIDTH, TABLE_LENGTH]])
 
-    #---- Framing the homography matrix
+    # framing the homography matrix
     h, status = cv2.findHomography(pts_src, pts_dst)
      
-    #---- transforming the image bound in the rectangle to straighten
-    homo_resized = cv2.warpPerspective(img_cv, h, (int(dist_width),int(dist_height)))
+    # transforming the image bound in the rectangle to straighten
+    homo_resized = cv2.warpPerspective(img_cv, h, (int(TABLE_WIDTH),int(TABLE_LENGTH)))
     return homo_resized
 
+
+# find circle coords (modified from https://stackoverflow.com/questions/60637120/detect-circles-in-opencv)
 def find_circles(img_cv):
-    # # Modified from https://stackoverflow.com/questions/60637120/detect-circles-in-opencv
     minDist = 15
     param1 = 50 #500
-    param2 = 30 #200 #smaller value-> more false circles
+    param2 = 30 #200 # smaller value-> more false circles
     minRadius = 20
     maxRadius = 40 #10
 
+    # find circles using Hough Circles
     circles = cv2.HoughCircles(img_cv, cv2.HOUGH_GRADIENT, 1, minDist, param1=param1, param2=param2, minRadius=minRadius, maxRadius=maxRadius)
-    print(len(circles[0,:]))
     if circles is not None:
         circles = np.uint16(np.around(circles))
         for i in circles[0,:]:
-            print("test", (i[0], i[1]), i[2])
             cv2.circle(img_cv, (i[0], i[1]), i[2], (255, 255, 255), 2)
     cv2.imshow('img_cv2', img_cv)
     cv2.waitKey(0)
     return circles[0,:,:2]
 
-def find_keypoints_blob(img_cv):
-    # Set up the detector with default parameters.
-    # Setup SimpleBlobDetector parameters.
-    params = cv2.SimpleBlobDetector_Params()
-
-    # Change thresholds
-    params.minThreshold = 10
-    params.maxThreshold = 300
-
-
-    # Filter by Area.
-    params.filterByArea = True
-    params.minArea = 1500
-
-    # Filter by Circularity
-    params.filterByCircularity = True
-    params.minCircularity = 0.05
-
-    # Filter by Convexity
-    params.filterByConvexity = True
-    params.minConvexity = 0.87
-
-    # Filter by Inertia
-    params.filterByInertia = True
-    params.minInertiaRatio = 0.01
-    detector = cv2.SimpleBlobDetector_create(params)
-    # Detect blobs.
-    keypoints = detector.detect(img_cv)
-    return keypoints
 
 def main():
     global kps
@@ -148,74 +133,59 @@ def main():
     limb.set_joint_position_speed(1.0) # this only sets it for position control - i don't think it matters for us
     limb.set_command_timeout(0.4)
 
-    # _ = input('to open')
-    # #gripper.calibrate()
-    # gripper.open()
-    # rospy.sleep(1)
-
-    # _ = input('to close')
-    # print("Gripper is_ready:", gripper.is_ready())
-    # gripper.close()
-    # rospy.sleep(1)
-    # #gripper.stop()
-    # print("Gripper force:", gripper.get_force())
-    # print("Gripper error:", gripper.has_error())
-    # print("Gripper is_calibrated:", gripper.is_calibrated())
-    # print("Gripper is_gripping:", gripper.is_gripping())
-
-    # gripper.reboot()
-    # gripper.set_holding_force()
-    
-    #_ = input('to open')
-    #gripper.calibrate()
-    # demjuice
-    #juice = [(1.7, 0), (1.4, -0.1), (1.5, -0.05)]
-    # JUICE FOR consistency
-    juice = [(1.4, 0), (1.6, 0), (1.8, 0)]
-    for j in juice:
+    for j in range(NUM_THROWS):
+        # ---------------------------------------------------
+        # --- move robot into loading position (for ball) ---
+        # ---------------------------------------------------
         _ = input('go to loading pos')
         go_to_joint_angles(-0.5, 0, 0, 0)
+
+        # -----------------
+        # --- grab ball ---
+        # -----------------
         c = input('to close')
         print("Gripper is_ready:", gripper.is_ready())
-        if (c != "n"):
+        if (c != "n"):  # in case ball is already in gripper
             gripper.open()
             rospy.sleep(1)
         gripper.close()
         rospy.sleep(1)
-        #gripper.stop() DO NOT USE STOP
         print("Gripper force:", gripper.get_force())
         print("Gripper error:", gripper.has_error())
         print("Gripper is_calibrated:", gripper.is_calibrated())
         print("Gripper is_gripping:", gripper.is_gripping())
 
+        # ---------------------------------------
+        # --- move to position to detect cups ---
+        # ---------------------------------------
         _ = input('find cup')
-        # commit vision
         kps = []
         captured = False
-        go_to_joint_angles(-0.5, -0.785, 0, 0)
+        go_to_joint_angles(-0.5, -0.785, 0, 0)  # go to detecting pose
         rospy.sleep(3)
-        sub = rospy.Subscriber("/io/internal_camera/right_hand_camera/image_rect", Image, capture_img)
-        while not captured:
+        sub = rospy.Subscriber("/io/internal_camera/right_hand_camera/image_rect", Image, capture_img)  # subscribe to right hand camera
+        while not captured:  # wait until cups detected by callback function
             rospy.sleep(1)
         while(input('redo? y/N: ') != 'N'):
             kps = []
             captured = False
             while not captured:
                 rospy.sleep(1)
-        sub.unregister()
+        sub.unregister()  # unsubscribe
 
-        #depth, theta = get_cup_pos(0.7, 24/57.5)
-        print(kps)
-        #depth, theta = kps[0].pt
-        #print(depth, theta)
-        depth, theta = get_cup_pos(*kps[0])
-        print("Throwing to depth:", depth, "meters and angle", theta)
+        print("Cup locations:", kps)
+        cup_depth, cup_theta = get_cup_pos(*kps[0]) # return first cup found
+        print("Throwing to depth:", cup_depth, "meters and angle", cup_theta)
 
+        # -------------------------------------------
+        # --- calculate release pose joint angles ---
+        # -------------------------------------------
         _ = input('to calculate')
         wrist_joint = 'right_j5'
         elbow_joint = 'right_j3'
         shoulder_joint = 'right_j1'
 
+        # robot dimensions and max joint velocities (from https://sceweb.sce.uhcl.edu/harman/A_CRS_ROS_SeminarDay3/UNIT3_3_SAWYER/3_3_1_160219_Sawyer_Advanced_Specs_Non_Confidential.pdf)
         base_height = 1.237
         hand_length = 0.3
         wrist_speed = 3.485
@@ -224,13 +194,14 @@ def main():
         arm_length = 0.4
         shoulder_speed = 1.328
 
-        theta0_0 = -0.5 - theta  # including initial robot angle
-        #depth = (56 + 0)/39.37
-
-        height = 0.72 + 4.75/39.37 # for cup height
+        # constants for solver
+        height = TABLE_HEIGHT + CUP_HEIGHT/393.7
         g = 9.81
 
+        # using pyo nonlinear optimizer with robot constraints
         model = pyo.ConcreteModel()
+
+        # joint angles
         model.theta1 = pyo.Var()
         model.theta3 = pyo.Var()
         model.theta5 = pyo.Var()
@@ -240,6 +211,7 @@ def main():
         model.vh = pyo.Var() # end effector velocity in the z (height) direction
         model.t = pyo.Var() # time
 
+        # encode robot position and velocity dynamics as constraints
         model.Constraint1 = pyo.Constraint(
             expr = model.vd == (arm_length * pyo.cos(math.pi/2 + model.theta1) * shoulder_speed) +
                                (forearm_length * pyo.cos(math.pi/2 + model.theta1 + model.theta3) * (shoulder_speed + elbow_speed)) +
@@ -260,8 +232,9 @@ def main():
                                (forearm_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3) * (shoulder_speed + elbow_speed)) +
                                (hand_length * pyo.sin(math.pi/2 + model.theta1 + model.theta3 +  model.theta5) * (shoulder_speed + elbow_speed + wrist_speed))
                                )) # set vh as a function of sawyer dimensions, sawyer speeds, joint angles
+
         # minimize distance between target coordinates and the coordinates of the ball at some point along its trajectory
-        model.Objective = pyo.Objective(expr = (model.dr + model.t*model.vd - depth)**2 + (base_height + model.hr + model.t*model.vh - g*(model.t**2)/2 - height)**2)
+        model.Objective = pyo.Objective(expr = (model.dr + model.t*model.vd - cup_depth)**2 + (base_height + model.hr + model.t*model.vh - g*(model.t**2)/2 - height)**2)
 
         solver = pyo.SolverFactory('ipopt')
         results = solver.solve(model)
@@ -276,32 +249,43 @@ def main():
         print(f"{theta1=}, {theta3=}, {theta5=}")
         print(f"{dr=}, {hr=}, {vd=}")
         print(f"{results.solver.termination_condition=}")
-        # model.display()
 
+        # -----------------------------
+        # --- move to 'loaded' pose ---
+        # -----------------------------
+
+        # calculate 'loaded' pose joint angles based on release pose and throw time
         _ = input('to load')
-        total_time = 0.4
-        throw_time = 0.3
-        theta1_0 = theta1 - throw_time * shoulder_speed
-        theta3_0 = theta3 - throw_time * elbow_speed
-        theta5_0 = theta5 - throw_time * wrist_speed
+        theta0_0 = -0.5 - cup_theta  # torso angle based on initial robot angle and cup angle
+        theta1_0 = theta1 - RELEASE_TIME * shoulder_speed
+        theta3_0 = theta3 - RELEASE_TIME * elbow_speed
+        theta5_0 = theta5 - RELEASE_TIME * wrist_speed
         print(f"{theta1_0=}, {theta3_0=}, {theta5_0=}")
         
+        # set joint angles to 'loaded' pose
         go_to_joint_angles(theta0_0, theta1_0, theta3_0, theta5_0)
         
+        # -----------------------------------------
+        # --- throw ball (hopefully into a cup) ---
+        # -----------------------------------------
+        
+        # motion before release
         _ = input('to throw')
         t0 = time.time()
         while not rospy.is_shutdown():
             limb.set_joint_velocities({elbow_joint: elbow_speed, wrist_joint: wrist_speed, shoulder_joint: shoulder_speed})
             d = time.time() - t0
-            if d >= throw_time:
+            if d >= RELEASE_TIME:
                 break
-        print(f"{time.time()-t0=}, {d=}")
+        
+        # open gripper
         gripper.open()
-        print(f"{time.time()-t0=}, {d=}")
+        
+        # follow-through motion
         while not rospy.is_shutdown():
             limb.set_joint_velocities({elbow_joint: elbow_speed, wrist_joint: wrist_speed, shoulder_joint: shoulder_speed})
             d = time.time() - t0
-            if d >= total_time:
+            if d >= THROW_TIME:
                 break
         print('done!')
 
